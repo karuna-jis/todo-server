@@ -226,7 +226,7 @@ app.post("/notify-task", async (req, res) => {
         },
         webpush: {
           fcmOptions: { link: notificationLink },
-          notification: { icon: "/logo192.png", badge: "/logo192.png", sound: "default" },
+          notification: { icon: "/icons/icon.png", badge: "/icons/icon.png", sound: "default" },
         },
       }));
 
@@ -318,8 +318,8 @@ app.post("/notify", async (req, res) => {
             : (data?.origin || "https://todo-app-virid-five.vercel.app") + "/",
         },
         notification: {
-          icon: data?.icon || "/logo192.png",
-          badge: data?.badge || "/logo192.png",
+          icon: data?.icon || "/icons/icon.png",
+          badge: data?.badge || "/icons/icon.png",
           sound: "default",
         },
       },
@@ -403,8 +403,8 @@ app.post("/notify-batch", async (req, res) => {
             : (data?.origin || "https://todo-app-virid-five.vercel.app") + "/",
         },
         notification: {
-          icon: data?.icon || "/logo192.png",
-          badge: data?.badge || "/logo192.png",
+          icon: data?.icon || "/icons/icon.png",
+          badge: data?.badge || "/icons/icon.png",
           sound: "default",
         },
       },
