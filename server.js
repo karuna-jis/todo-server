@@ -5,7 +5,9 @@
  * Features:
  * - FCM push notifications (HTTP v1 API)
  * - Batch notifications support
+ * - Task notification to admin
  * - Environment variable support
+ * - Auto-fix private_key \n → \\n
  */
 
 // Load environment variables from .env file
@@ -27,8 +29,8 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
   "http://localhost:3000",
   "https://todo-app-virid-five.vercel.app",
-  "https://todo-app-virid-five.vercel.app/", // With trailing slash
-  ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : []),
+  "https://todo-app-virid-five.vercel.app/",
+  ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",").map(o => o.trim()) : []),
 ];
 
 app.use(cors({
@@ -57,11 +59,13 @@ app.use(express.json());
 // Firebase Admin SDK initialization
 let firebaseInitialized = false;
 let messaging = null;
+let firestore = null;
 
 function initializeFirebase() {
   try {
     if (admin.apps.length > 0) {
       messaging = admin.messaging();
+      firestore = admin.firestore();
       firebaseInitialized = true;
       return;
     }
@@ -70,7 +74,10 @@ function initializeFirebase() {
 
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       try {
-        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT;
+        // Auto-fix private_key \n → \\n
+        const fixedString = serviceAccountString.replace(/\\n/g, '\n');
+        serviceAccount = JSON.parse(fixedString);
       } catch (error) {
         console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT:", error.message);
       }
@@ -100,7 +107,9 @@ function initializeFirebase() {
     }
 
     messaging = admin.messaging();
+    firestore = admin.firestore();
     firebaseInitialized = true;
+    console.log("✅ Firebase Admin SDK initialized successfully");
   } catch (error) {
     console.error("Failed to initialize Firebase Admin SDK:", error.message);
     firebaseInitialized = false;
@@ -112,6 +121,145 @@ initializeFirebase();
 // ============================================================================
 // FCM PUSH NOTIFICATIONS
 // ============================================================================
+
+/**
+ * POST /send-task-notification
+ * Send notification to admin when task is added
+ * Body: { projectId, addedBy, taskName, taskId }
+ */
+app.post("/send-task-notification", async (req, res) => {
+  try {
+    if (!firebaseInitialized) {
+      return res.status(500).json({
+        success: false,
+        error: "Firebase not initialized",
+      });
+    }
+
+    const { projectId, addedBy, taskName, taskId } = req.body;
+
+    if (!projectId || !addedBy || !taskName) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: projectId, addedBy, or taskName",
+      });
+    }
+
+    console.log(`📤 Sending task notification for project: ${projectId}`);
+    console.log(`   Task: ${taskName}`);
+    console.log(`   Added by: ${addedBy}`);
+
+    // Get project document to find admin
+    const projectDoc = await firestore.collection("projects").doc(projectId).get();
+    
+    if (!projectDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: "Project not found",
+      });
+    }
+
+    const projectData = projectDoc.data();
+    const adminUid = projectData.createdBy; // Admin is the project creator
+
+    if (!adminUid) {
+      return res.status(400).json({
+        success: false,
+        error: "Project has no admin (createdBy field missing)",
+      });
+    }
+
+    console.log(`   Admin UID: ${adminUid}`);
+
+    // Get admin's FCM token
+    const adminDoc = await firestore.collection("users").doc(adminUid).get();
+    
+    if (!adminDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        error: "Admin user not found",
+      });
+    }
+
+    const adminData = adminDoc.data();
+    const adminToken = adminData.fcmToken;
+
+    if (!adminToken) {
+      return res.status(400).json({
+        success: false,
+        error: "Admin has no FCM token. Admin needs to login and allow notifications.",
+      });
+    }
+
+    console.log(`   Admin FCM token found: ${adminToken.substring(0, 20)}...`);
+
+    // Get admin email for notification
+    const adminEmail = adminData.email || adminUid;
+    const addedByEmail = addedBy;
+
+    // Construct notification
+    const baseUrl = req.body.origin || "https://todo-app-virid-five.vercel.app";
+    const projectName = projectData.name || "Project";
+    const notificationLink = `${baseUrl}/view/${projectId}/${encodeURIComponent(projectName)}`;
+
+    const message = {
+      token: adminToken,
+      notification: {
+        title: "New Task Added",
+        body: `${addedByEmail} added: ${taskName}`,
+      },
+      data: {
+        projectId: String(projectId),
+        projectName: String(projectName),
+        taskId: String(taskId || ""),
+        taskName: String(taskName),
+        addedBy: String(addedBy),
+        type: "task_created",
+      },
+      webpush: {
+        fcmOptions: {
+          link: notificationLink,
+        },
+        notification: {
+          icon: "/logo192.png",
+          badge: "/logo192.png",
+          sound: "default",
+        },
+      },
+    };
+
+    // Send notification
+    const response = await messaging.send(message);
+
+    console.log(`✅ Notification sent to admin: ${adminEmail}`);
+    console.log(`   Message ID: ${response}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification sent to admin successfully",
+      messageId: response,
+      adminEmail: adminEmail,
+    });
+  } catch (error) {
+    console.error("Error sending task notification:", error.message);
+
+    if (error.code === "messaging/invalid-registration-token" ||
+        error.code === "messaging/registration-token-not-registered") {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or expired FCM token",
+        code: error.code,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: "Failed to send notification",
+      message: error.message,
+      code: error.code,
+    });
+  }
+});
 
 /**
  * POST /notify
@@ -149,7 +297,6 @@ app.post("/notify", async (req, res) => {
       },
       webpush: {
         fcmOptions: {
-          // Use absolute URL - construct from origin if link is relative
           link: data?.link 
             ? (data.link.startsWith("http") 
                 ? data.link 
@@ -159,7 +306,7 @@ app.post("/notify", async (req, res) => {
         notification: {
           icon: data?.icon || "/logo192.png",
           badge: data?.badge || "/logo192.png",
-          sound: "default", // WhatsApp-style sound
+          sound: "default",
         },
       },
     };
@@ -178,7 +325,7 @@ app.post("/notify", async (req, res) => {
         error.code === "messaging/registration-token-not-registered") {
       return res.status(400).json({
         success: false,
-        error: "Invalid or unregistered FCM token",
+        error: "Invalid or expired FCM token",
         code: error.code,
       });
     }
@@ -235,7 +382,6 @@ app.post("/notify-batch", async (req, res) => {
       },
       webpush: {
         fcmOptions: {
-          // Use absolute URL - construct from origin if link is relative
           link: data?.link 
             ? (data.link.startsWith("http") 
                 ? data.link 
@@ -245,7 +391,7 @@ app.post("/notify-batch", async (req, res) => {
         notification: {
           icon: data?.icon || "/logo192.png",
           badge: data?.badge || "/logo192.png",
-          sound: "default", // WhatsApp-style sound
+          sound: "default",
         },
       },
     }));
@@ -307,48 +453,45 @@ app.post("/notify-batch", async (req, res) => {
       }
     }
 
-    console.log(`📊 Batch notification result: ${successCount} success, ${failureCount} failures out of ${tokens.length} total`);
-
     return res.status(200).json({
       success: true,
+      message: "Batch notifications processed",
       notified: successCount,
       failed: failureCount,
       total: tokens.length,
       results: results,
     });
   } catch (error) {
-    console.error("❌ Error in batch notification:", error.message);
-    console.error("   Stack:", error.stack);
+    console.error("Error sending batch notifications:", error.message);
     return res.status(500).json({
       success: false,
-      error: "Internal server error",
+      error: "Failed to send batch notifications",
       message: error.message,
+      code: error.code,
     });
   }
 });
 
-// ============================================================================
-// HEALTH CHECK
-// ============================================================================
-
+// Health check
 app.get("/health", (req, res) => {
   res.status(200).json({
-    status: "ok",
+    success: true,
     message: "Server is running",
-    firebase: {
-      initialized: firebaseInitialized,
-      projectId: firebaseInitialized ? admin.app().options.projectId : null,
-    },
+    firebaseInitialized: firebaseInitialized,
+    timestamp: new Date().toISOString(),
   });
 });
 
+// API info
 app.get("/", (req, res) => {
   res.status(200).json({
+    success: true,
     message: "FCM Notification Server",
     endpoints: {
       health: "GET /health",
       notify: "POST /notify",
       notifyBatch: "POST /notify-batch",
+      sendTaskNotification: "POST /send-task-notification",
     },
   });
 });
