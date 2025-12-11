@@ -27,6 +27,7 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
   "http://localhost:3000",
   "https://todo-app-virid-five.vercel.app",
+  "https://todo-app-virid-five.vercel.app/", // With trailing slash
   ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : []),
 ];
 
