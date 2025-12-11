@@ -213,8 +213,12 @@ app.post("/send-task-notification", async (req, res) => {
         projectName: String(projectName),
         taskId: String(taskId || ""),
         taskName: String(taskName),
+        taskText: String(taskName), // Alternative field name
         addedBy: String(addedBy),
+        createdBy: String(addedBy), // Alternative field name for consistency
+        createdByName: String(addedByEmail), // User name/email
         type: "task_created",
+        timestamp: String(Date.now()), // For duplicate prevention
       },
       webpush: {
         fcmOptions: {
