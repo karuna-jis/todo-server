@@ -159,6 +159,7 @@ app.post("/notify", async (req, res) => {
         notification: {
           icon: data?.icon || "/logo192.png",
           badge: data?.badge || "/logo192.png",
+          sound: "default", // WhatsApp-style sound
         },
       },
     };
@@ -244,6 +245,7 @@ app.post("/notify-batch", async (req, res) => {
         notification: {
           icon: data?.icon || "/logo192.png",
           badge: data?.badge || "/logo192.png",
+          sound: "default", // WhatsApp-style sound
         },
       },
     }));
