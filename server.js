@@ -84,12 +84,20 @@ function initializeFirebase() {
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
       try {
         serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+        // Auto-fix private_key: replace escaped newlines with actual newlines
+        if (serviceAccount && serviceAccount.private_key) {
+          serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+        }
       } catch (error) {
         console.error("Failed to load service account from file:", error.message);
       }
     } else {
       try {
         serviceAccount = require("./serviceAccountKey.json");
+        // Auto-fix private_key: replace escaped newlines with actual newlines
+        if (serviceAccount && serviceAccount.private_key) {
+          serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+        }
       } catch (error) {
         // Try application default credentials
       }
@@ -123,11 +131,11 @@ initializeFirebase();
 // ============================================================================
 
 /**
- * POST /send-task-notification
- * Send notification to admin when task is added
- * Body: { projectId, addedBy, taskName, taskId }
+ * POST /notify-task
+ * Send notification when task is added
+ * Body: { projectId, addedBy, addedByName, taskName, taskId, origin }
  */
-app.post("/send-task-notification", async (req, res) => {
+app.post("/notify-task", async (req, res) => {
   try {
     if (!firebaseInitialized) {
       return res.status(500).json({
@@ -136,7 +144,7 @@ app.post("/send-task-notification", async (req, res) => {
       });
     }
 
-    const { projectId, addedBy, taskName, taskId } = req.body;
+    const { projectId, addedBy, addedByName, taskName, taskId, origin } = req.body;
 
     if (!projectId || !addedBy || !taskName) {
       return res.status(400).json({
@@ -145,105 +153,107 @@ app.post("/send-task-notification", async (req, res) => {
       });
     }
 
-    console.log(`📤 Sending task notification for project: ${projectId}`);
-    console.log(`   Task: ${taskName}`);
-    console.log(`   Added by: ${addedBy}`);
+    try {
+      const projectDoc = await firestore.collection("projects").doc(projectId).get();
+      if (!projectDoc.exists) {
+        return res.status(404).json({ success: false, error: "Project not found" });
+      }
 
-    // Get project document to find admin
-    const projectDoc = await firestore.collection("projects").doc(projectId).get();
-    
-    if (!projectDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        error: "Project not found",
-      });
-    }
+      const projectData = projectDoc.data();
+      const projectName = projectData.name || "Project";
+      const adminUid = projectData.createdBy;
+      const assignedUsers = projectData.users || [];
+      const baseUrl = origin || "https://todo-app-virid-five.vercel.app";
+      const notificationLink = `${baseUrl}/view/${projectId}/${encodeURIComponent(projectName)}`;
 
-    const projectData = projectDoc.data();
-    const adminUid = projectData.createdBy; // Admin is the project creator
+      let isAdmin = false;
+      if (adminUid) {
+        const adminDoc = await firestore.collection("users").doc(adminUid).get();
+        if (adminDoc.exists) {
+          isAdmin = adminDoc.data().email === addedBy;
+        }
+      }
 
-    if (!adminUid) {
-      return res.status(400).json({
-        success: false,
-        error: "Project has no admin (createdBy field missing)",
-      });
-    }
+      let targetTokens = [];
+      let recipients = [];
 
-    console.log(`   Admin UID: ${adminUid}`);
+      if (isAdmin) {
+        for (const uid of assignedUsers) {
+          if (uid === adminUid) continue;
+          const userDoc = await firestore.collection("users").doc(uid).get();
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            if (userData.fcmToken) {
+              targetTokens.push(userData.fcmToken);
+              recipients.push(userData.email || uid);
+            }
+          }
+        }
+      } else {
+        if (adminUid) {
+          const adminDoc = await firestore.collection("users").doc(adminUid).get();
+          if (adminDoc.exists) {
+            const adminData = adminDoc.data();
+            if (adminData.fcmToken) {
+              targetTokens.push(adminData.fcmToken);
+              recipients.push(adminData.email || adminUid);
+            }
+          }
+        }
+      }
 
-    // Get admin's FCM token
-    const adminDoc = await firestore.collection("users").doc(adminUid).get();
-    
-    if (!adminDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        error: "Admin user not found",
-      });
-    }
+      if (targetTokens.length === 0) {
+        return res.status(200).json({ success: true, message: "No recipients with FCM tokens", notified: 0 });
+      }
 
-    const adminData = adminDoc.data();
-    const adminToken = adminData.fcmToken;
-
-    if (!adminToken) {
-      return res.status(400).json({
-        success: false,
-        error: "Admin has no FCM token. Admin needs to login and allow notifications.",
-      });
-    }
-
-    console.log(`   Admin FCM token found: ${adminToken.substring(0, 20)}...`);
-
-    // Get admin email for notification
-    const adminEmail = adminData.email || adminUid;
-    const addedByEmail = addedBy;
-
-    // Construct notification
-    const baseUrl = req.body.origin || "https://todo-app-virid-five.vercel.app";
-    const projectName = projectData.name || "Project";
-    const notificationLink = `${baseUrl}/view/${projectId}/${encodeURIComponent(projectName)}`;
-
-    const message = {
-      token: adminToken,
-      notification: {
-        title: "New Task Added",
-        body: `${addedByEmail} added: ${taskName}`,
-      },
-      data: {
-        projectId: String(projectId),
-        projectName: String(projectName),
-        taskId: String(taskId || ""),
-        taskName: String(taskName),
-        taskText: String(taskName), // Alternative field name
-        addedBy: String(addedBy),
-        createdBy: String(addedBy), // Alternative field name for consistency
-        createdByName: String(addedByEmail), // User name/email
-        type: "task_created",
-        timestamp: String(Date.now()), // For duplicate prevention
-      },
-      webpush: {
-        fcmOptions: {
-          link: notificationLink,
-        },
+      const messages = targetTokens.map(token => ({
+        token: token,
         notification: {
-          icon: "/logo192.png",
-          badge: "/logo192.png",
-          sound: "default",
+          title: "New Task Added",
+          body: `${addedByName || addedBy} added new task: ${taskName}`,
         },
-      },
-    };
+        data: {
+          projectId: String(projectId),
+          projectName: String(projectName),
+          taskId: String(taskId || ""),
+          taskName: String(taskName),
+          addedBy: String(addedBy),
+          addedByName: String(addedByName || addedBy),
+          createdBy: String(addedBy),
+          createdByName: String(addedByName || addedBy),
+          type: "task_created",
+          timestamp: String(Date.now()),
+        },
+        webpush: {
+          fcmOptions: { link: notificationLink },
+          notification: { icon: "/logo192.png", badge: "/logo192.png", sound: "default" },
+        },
+      }));
 
-    // Send notification
-    const response = await messaging.send(message);
+      let successCount = 0;
+      let failureCount = 0;
 
-    console.log(`✅ Notification sent to admin: ${adminEmail}`);
-    console.log(`   Message ID: ${response}`);
+      for (const message of messages) {
+        try {
+          await messaging.send(message);
+          successCount++;
+        } catch (error) {
+          failureCount++;
+          console.error("Failed to send notification:", error.message);
+        }
+      }
 
-    return res.status(200).json({
-      success: true,
-      message: "Notification sent to admin successfully",
-      messageId: response,
-      adminEmail: adminEmail,
-    });
+      return res.status(200).json({
+        success: true,
+        message: `Notifications sent: ${successCount} success, ${failureCount} failed`,
+        notified: successCount,
+        failed: failureCount,
+        recipients: recipients,
+      });
+    } catch (error) {
+      console.error("Error in notify-task:", error);
+      return res.status(500).json({ success: false, error: "Failed to send notifications", message: error.message });
+    }
   } catch (error) {
     console.error("Error sending task notification:", error.message);
 

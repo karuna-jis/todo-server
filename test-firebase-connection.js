@@ -25,7 +25,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   }
 } else {
   try {
-    serviceAccount = require("./serviceAccountKey.json");
+    serviceAccount = require("../todos/notification-server/serviceAccountKey.json");
     console.log("✅ Loaded service account from serviceAccountKey.json");
   } catch (error) {
     console.error("❌ Failed to load serviceAccountKey.json:", error.message);
@@ -123,4 +123,8 @@ try {
   console.error("   Stack:", error.stack);
   process.exit(1);
 }
+
+
+
+
 
