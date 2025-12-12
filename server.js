@@ -225,9 +225,46 @@ app.post("/notify-task", async (req, res) => {
           timestamp: String(Date.now()),
           badgeCount: "1", // Badge count increment (will be calculated by service worker)
         },
+        // Android-specific badge configuration
+        android: {
+          notification: {
+            icon: "ic_notification",
+            color: "#2a8c7b",
+            sound: "default",
+            channelId: "task_notifications",
+            // Android badge count - shows on app icon
+            notificationCount: 1, // Will be updated by service worker based on unread count
+            // Priority for Android notifications
+            priority: "high",
+            // Visibility for Android
+            visibility: "public",
+            // Default action
+            defaultSound: true,
+            defaultVibrateTimings: true,
+            defaultLightSettings: true,
+          },
+          // Android notification priority
+          priority: "high",
+        },
+        // APNS (iOS) badge configuration
+        apns: {
+          payload: {
+            aps: {
+              badge: 1, // iOS badge count
+              sound: "default",
+              contentAvailable: true,
+            },
+          },
+        },
         webpush: {
           fcmOptions: { link: notificationLink },
-          notification: { icon: "/icons/icon.png", badge: "/icons/icon.png", sound: "default" },
+          notification: { 
+            icon: "/icons/icon.png", 
+            badge: "/icons/icon.png", 
+            sound: "default",
+            // Web badge count
+            badgeCount: 1,
+          },
         },
       }));
 
@@ -395,6 +432,32 @@ app.post("/notify-batch", async (req, res) => {
           Object.entries(data || {}).map(([key, value]) => [key, String(value)])
         ),
       },
+      // Android-specific badge configuration
+      android: {
+        notification: {
+          icon: "ic_notification",
+          color: "#2a8c7b",
+          sound: "default",
+          channelId: "task_notifications",
+          notificationCount: parseInt(data?.badgeCount || "1", 10), // Android badge count
+          priority: "high",
+          visibility: "public",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          defaultLightSettings: true,
+        },
+        priority: "high",
+      },
+      // APNS (iOS) badge configuration
+      apns: {
+        payload: {
+          aps: {
+            badge: parseInt(data?.badgeCount || "1", 10), // iOS badge count
+            sound: "default",
+            contentAvailable: true,
+          },
+        },
+      },
       webpush: {
         fcmOptions: {
           link: data?.link 
@@ -407,6 +470,7 @@ app.post("/notify-batch", async (req, res) => {
           icon: data?.icon || "/icons/icon.png",
           badge: data?.badge || "/icons/icon.png",
           sound: "default",
+          badgeCount: parseInt(data?.badgeCount || "1", 10), // Web badge count
         },
       },
     }));
