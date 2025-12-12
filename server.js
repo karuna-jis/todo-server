@@ -223,6 +223,7 @@ app.post("/notify-task", async (req, res) => {
           createdByName: String(addedByName || addedBy),
           type: "task_created",
           timestamp: String(Date.now()),
+          badgeCount: "1", // Badge count increment (will be calculated by service worker)
         },
         webpush: {
           fcmOptions: { link: notificationLink },
